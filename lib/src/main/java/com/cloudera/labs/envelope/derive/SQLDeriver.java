@@ -19,7 +19,8 @@ package com.cloudera.labs.envelope.derive;
 
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.util.Map;
+//import java.util.Map;
+import java.util.*;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -40,6 +41,7 @@ public class SQLDeriver implements Deriver, ProvidesAlias {
 
   public static final String QUERY_LITERAL_CONFIG_NAME = "query.literal";
   public static final String QUERY_FILE_CONFIG_NAME = "query.file";
+  public static final String SCHEMA_CONFIG_NAME = "align.schema";
 
   private Config config;
 
@@ -63,6 +65,30 @@ public class SQLDeriver implements Deriver, ProvidesAlias {
     }
 
     Dataset<Row> derived = Contexts.getSparkSession().sql(query);
+
+    if (config.hasPath(SCHEMA_CONFIG_NAME)) {
+      List<String> alignCols = new ArrayList<String>();
+
+      if (dependencies.containsKey(config.getString(SCHEMA_CONFIG_NAME)))  {
+        alignCols = Arrays.asList(dependencies.get(config.getString(SCHEMA_CONFIG_NAME)).schema().fieldNames());
+      }
+      else {
+        throw new RuntimeException("The \"" + SCHEMA_CONFIG_NAME + "\" deriver named: \"" + config.getString(SCHEMA_CONFIG_NAME) + 
+                                   "\" was either not found or not included in this deriver's dependencies list.");
+      }
+      Set<String> dependencyColsHash = new HashSet<String>(Arrays.asList(derived.schema().fieldNames())); 
+      List<String> queryFields = new ArrayList<String>();
+      for (String col : alignCols) {
+        if (dependencyColsHash.contains(col)) {
+          queryFields.add(col);
+        }
+        else {
+          queryFields.add("NULL as " + col);
+        }
+      }
+      String fieldString = "SELECT " + String.join(", ", queryFields) + " FROM (" + query + ")";
+      System.out.println(">>>>>>>>>>>>>>>>>>> " + fieldString);
+    }
 
     return derived;
   }
