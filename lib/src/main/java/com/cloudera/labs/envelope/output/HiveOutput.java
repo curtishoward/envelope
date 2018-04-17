@@ -20,10 +20,14 @@ package com.cloudera.labs.envelope.output;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashSet;
 
 import org.apache.spark.sql.DataFrameWriter;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
+import org.apache.spark.sql.Column;
 import org.apache.spark.sql.SaveMode;
 
 import com.cloudera.labs.envelope.load.ProvidesAlias;
@@ -32,6 +36,8 @@ import com.cloudera.labs.envelope.utils.ConfigUtils;
 import com.google.common.collect.Sets;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigValue;
+import com.cloudera.labs.envelope.spark.Contexts;
+import scala.collection.JavaConversions;
 
 import scala.Tuple2;
 
@@ -41,6 +47,8 @@ public class HiveOutput implements BulkOutput, ProvidesAlias {
   public final static String PARTITION_BY_CONFIG = "partition.by";
   public final static String LOCATION_CONFIG = "location";
   public final static String OPTIONS_CONFIG = "options";
+  public final static String INFER_COLUMNS_CONFIG = "infer.columns";
+  
 
   private Config config;
   private ConfigUtils.OptionMap options;
@@ -77,7 +85,7 @@ public class HiveOutput implements BulkOutput, ProvidesAlias {
   public void applyBulkMutations(List<Tuple2<MutationType, Dataset<Row>>> planned) {    
     for (Tuple2<MutationType, Dataset<Row>> plan : planned) {
       MutationType mutationType = plan._1();
-      Dataset<Row> mutation = plan._2();
+      Dataset<Row> mutation = (getInferColumns()) ? inferColumns(plan._2()) : plan._2();
       DataFrameWriter<Row> writer = mutation.write();
 
       if (hasPartitionColumns()) {
@@ -108,6 +116,23 @@ public class HiveOutput implements BulkOutput, ProvidesAlias {
     return Sets.newHashSet(MutationType.INSERT, MutationType.OVERWRITE);
   }
 
+  private Dataset<Row> inferColumns(Dataset<Row> inputSchema) {
+    Set<String> dependencyColsHash = new HashSet<String>(Arrays.asList(inputSchema.schema().fieldNames()));
+    List<String> alignCols = Arrays.asList(Contexts.getSparkSession().table(getTableName()).schema().fieldNames());
+    List<String> queryFields = new ArrayList<String>();
+
+    for (String col : alignCols) {
+      if (dependencyColsHash.contains(col)) {
+        queryFields.add(col);
+      }
+      else {
+        queryFields.add("NULL as " + col);
+      }
+    }
+    Dataset<Row> derived = inputSchema.selectExpr(queryFields.toArray(new String[queryFields.size()]));
+    return derived;
+  }
+
   private boolean hasPartitionColumns() {
     return config.hasPath(PARTITION_BY_CONFIG);
   }
@@ -123,6 +148,10 @@ public class HiveOutput implements BulkOutput, ProvidesAlias {
 
   private String getTableName() {
     return config.getString(TABLE_CONFIG);
+  }
+
+  private boolean getInferColumns() {
+    return (config.hasPath(INFER_COLUMNS_CONFIG) && Boolean.parseBoolean(config.getString(INFER_COLUMNS_CONFIG))) ? true : false;
   }
 
   @Override
